@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design tokens: Mos Beansley Cantina (optional use in non-Tailwind code) */
+:root {
+  --cantina-bg: #1c1916;
+  --cantina-surface: #2a2521;
+  --cantina-card: #352f2a;
+  --cantina-border: #4a443d;
+  --cantina-copper: #b87333;
+  --cantina-copper-light: #c17f3a;
+  --cantina-sand: #d4c4a8;
+  --cantina-amber: #e5a84a;
+  --cantina-cream: #f5f0e6;
+  --cantina-muted: #a89f8f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: 'Source Sans 3', system-ui, sans-serif;
+  background-color: var(--cantina-bg);
+  color: var(--cantina-cream);
+}
+
+#app {
+  min-height: 100vh;
+}
+
+/* Mos Beansley Cantina — компонентные классы кнопок (см. docs/DESIGN_CODE.md) */
+@layer components {
+  .btn-cantina-primary {
+    @apply rounded-lg px-5 py-2.5 font-medium transition-colors;
+    @apply bg-cantina-copper text-cantina-cream hover:bg-cantina-copper-light;
+  }
+  .btn-cantina-secondary {
+    @apply rounded-lg px-5 py-2.5 font-medium transition-colors border border-cantina-border;
+    @apply text-cantina-cream hover:bg-cantina-surface;
+  }
+  .btn-cantina-ghost {
+    @apply rounded-lg px-5 py-2.5 font-medium transition-colors text-cantina-sand hover:bg-cantina-surface/50;
+  }
+  .btn-cantina-danger {
+    @apply rounded-lg px-5 py-2.5 font-medium transition-colors;
+    @apply bg-cantina-danger text-white hover:opacity-90;
+  }
+  .card-cantina {
+    @apply rounded-xl border border-cantina-border bg-cantina-card p-4 shadow-cantina;
+  }
+}
