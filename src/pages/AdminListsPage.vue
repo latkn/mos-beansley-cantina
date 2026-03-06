@@ -1,5 +1,35 @@
 <script setup>
-// Страница только со ссылками на разделы с редактированием списков
+import { ref } from 'vue'
+import { resetDatabase } from '@/api/resetDb'
+
+const resetModalOpen = ref(false)
+const resetSubmitting = ref(false)
+const resetError = ref('')
+
+function openResetModal() {
+  resetModalOpen.value = true
+  resetError.value = ''
+}
+
+function closeResetModal() {
+  if (resetSubmitting.value) return
+  resetModalOpen.value = false
+  resetError.value = ''
+}
+
+async function confirmResetDb() {
+  if (resetSubmitting.value) return
+  resetSubmitting.value = true
+  resetError.value = ''
+  try {
+    await resetDatabase()
+    closeResetModal()
+  } catch (e) {
+    resetError.value = e?.message || 'Ошибка сброса'
+  } finally {
+    resetSubmitting.value = false
+  }
+}
 </script>
 
 <template>
@@ -69,6 +99,51 @@
           <span class="mt-0.5 block text-cantina-muted text-sm">Выполненные задания: хронология, фотоотчёты, участники, время</span>
         </router-link>
       </nav>
+
+      <div class="mt-10 pt-6 border-t border-cantina-border">
+        <button
+          type="button"
+          class="w-full py-3 px-4 rounded-xl border-2 border-cantina-danger/50 bg-cantina-danger/10 text-cantina-danger font-mono font-semibold hover:bg-cantina-danger/20 transition-colors"
+          @click="openResetModal"
+        >
+          Обнулить базу данных полностью
+        </button>
+      </div>
     </div>
+
+    <!-- Модалка подтверждения сброса БД -->
+    <Teleport to="body">
+      <div
+        v-if="resetModalOpen"
+        class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"
+        @click.self="closeResetModal"
+      >
+        <div class="bg-cantina-card border-2 border-cantina-danger rounded-xl p-6 max-w-sm w-full shadow-cantina">
+          <h3 class="font-display text-lg font-semibold text-cantina-danger mb-2">Обнулить базу данных?</h3>
+          <p class="text-cantina-sand text-sm mb-4">
+            Будут удалены все гости, заказы, планеты, задания, вопросы квиза, кофейная карта, аллергены, расы и файлы в хранилище. Действие необратимо.
+          </p>
+          <p v-if="resetError" class="mb-4 text-cantina-danger text-sm">{{ resetError }}</p>
+          <div class="flex gap-2">
+            <button
+              type="button"
+              class="flex-1 py-2 rounded-lg bg-cantina-danger hover:bg-cantina-danger/90 text-white font-semibold disabled:opacity-50"
+              :disabled="resetSubmitting"
+              @click="confirmResetDb"
+            >
+              {{ resetSubmitting ? '…' : 'Да, обнулить' }}
+            </button>
+            <button
+              type="button"
+              class="px-4 py-2 rounded-lg border border-cantina-border text-cantina-sand hover:bg-cantina-surface"
+              :disabled="resetSubmitting"
+              @click="closeResetModal"
+            >
+              Отмена
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
