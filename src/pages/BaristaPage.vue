@@ -2,7 +2,6 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import {
   getPendingOrders,
-  getReadyForPickupOrders,
   markOrderReady,
   markOrderPickedUp,
   updateOrderCoffee,
@@ -14,7 +13,6 @@ import { getGuestIdsWithCompletedTask } from '@/api/planets'
 
 const preparing = ref([])
 const guestIdsTaskCompleted = ref(new Set())
-const readyForPickup = ref([])
 const loading = ref(true)
 const actionId = ref(null)
 /** id заказов, которые «в работе» — раскрыты в большую карточку с инструкцией */
@@ -26,20 +24,16 @@ const orderDrinkOptions = ref({})
 const guestTriedCoffeeIdsByOrder = ref({})
 /** Какой напиток бариста смотрит (клик по карточке): orderId -> drink. Закрепление — только по кнопке «Выбрать». */
 const previewDrinkByOrder = ref({})
-/** Заказ, для которого показываем модалку «Ваш заказ готов» (после нажатия Готово). */
-const orderReadyModalOrder = ref(null)
 
 async function load() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const [pending, ready, taskCompletedIds] = await Promise.all([
+    const [pending, taskCompletedIds] = await Promise.all([
       getPendingOrders(),
-      getReadyForPickupOrders(),
       getGuestIdsWithCompletedTask(),
     ])
     preparing.value = pending
-    readyForPickup.value = ready
     guestIdsTaskCompleted.value = taskCompletedIds
     expandedOrderIds.value = expandedOrderIds.value.filter((id) => pending.some((o) => o.id === id))
     orderDrinkOptions.value = {}
@@ -157,10 +151,7 @@ async function handleReady(order) {
   try {
     callGuest(order)
     await markOrderReady(order.id)
-    orderReadyModalOrder.value = {
-      callsign: order.callsign,
-      avatar_url: order.guest?.avatar_url,
-    }
+    await markOrderPickedUp(order.id)
     playOrderReadySound()
     await load()
   } catch (e) {
@@ -178,25 +169,6 @@ function playOrderReadySound() {
     const audio = new Audio(ORDER_READY_SOUND_URL)
     audio.play().catch(() => {})
   } catch (_) {}
-}
-
-function closeOrderReadyModal() {
-  orderReadyModalOrder.value = null
-}
-
-async function handlePickedUp(order) {
-  if (actionId.value) return
-  actionId.value = order.id
-  errorMessage.value = ''
-  try {
-    await markOrderPickedUp(order.id)
-    await load()
-  } catch (e) {
-    console.error(e)
-    errorMessage.value = e?.message || 'Не удалось отметить выдачу'
-  } finally {
-    actionId.value = null
-  }
 }
 
 function isActionLoading(orderId) {
@@ -226,14 +198,14 @@ onUnmounted(() => {
     <div class="max-w-4xl mx-auto">
       <h1 class="font-display text-2xl text-cantina-amber font-semibold mb-1">Бариста — очередь</h1>
       <p class="text-cantina-muted text-sm mb-6">
-        Нажми «Готовить» на карточке — она станет большой с инструкцией. Потом «Готово» — вызов гостя и перенос в табло. Работать могут двое и больше.
+        Нажми «Готовить» на карточке — она станет большой с инструкцией. Потом «Готово» — вызов гостя, заказ сразу исчезнет из очереди. Работать могут двое и больше.
       </p>
 
       <p v-if="errorMessage" class="mb-4 px-4 py-2 rounded-lg bg-cantina-danger/20 border border-cantina-danger/50 text-cantina-cream text-sm">
         {{ errorMessage }}
       </p>
 
-      <div v-if="loading && !preparing.length && !readyForPickup.length" class="flex flex-col items-center gap-3 py-12">
+      <div v-if="loading && !preparing.length" class="flex flex-col items-center gap-3 py-12">
         <div class="w-10 h-10 border-2 border-cantina-border border-t-cantina-copper rounded-full animate-spin" />
         <span class="text-cantina-muted text-sm">Загрузка…</span>
       </div>
@@ -484,133 +456,8 @@ onUnmounted(() => {
           </ul>
         </section>
 
-        <p v-if="!preparing.length && !readyForPickup.length" class="text-cantina-muted py-8 text-center">Очередь пуста.</p>
-
-        <!-- Табло вызова: сюда переносятся заказы после «Готово». К стойке: ПОЗЫВНОЙ + карточка -->
-        <section v-if="readyForPickup.length" class="mt-10 pt-8 border-t border-cantina-border">
-          <div class="rounded-xl bg-cantina-card border-2 border-cantina-copper/40 overflow-hidden shadow-cantina">
-            <div class="px-4 py-3 bg-cantina-copper/20 border-b border-cantina-copper/30">
-              <h2 class="text-cantina-copper font-mono font-bold uppercase tracking-widest text-sm">Табло вызова · К стойке</h2>
-            </div>
-            <ul class="p-4 md:p-6 space-y-6">
-              <li
-                v-for="order in readyForPickup"
-                :key="order.id"
-                class="rounded-xl bg-cantina-surface border border-cantina-border overflow-hidden"
-              >
-                <div class="px-4 py-4 md:py-5 bg-cantina-bg/80 border-b border-cantina-border">
-                  <p class="text-2xl md:text-4xl font-mono font-black text-cantina-copper uppercase tracking-wider text-center">
-                    К стойке: <span class="text-cantina-cream">{{ order.callsign }}</span>
-                  </p>
-                </div>
-                <div class="flex flex-wrap items-center gap-6 p-4">
-                  <div class="w-24 h-24 rounded-full bg-cantina-surface overflow-hidden flex-shrink-0 border-2 border-cantina-copper/40">
-                    <img
-                      v-if="order.guest?.avatar_url"
-                      :src="order.guest.avatar_url"
-                      :alt="order.callsign"
-                      class="w-full h-full object-cover"
-                    />
-                    <div v-else class="w-full h-full flex items-center justify-center text-cantina-muted font-bold text-2xl">
-                      {{ (order.callsign || '?').slice(0, 2) }}
-                    </div>
-                  </div>
-                  <div class="w-14 h-14 rounded-lg bg-cantina-surface border border-cantina-border overflow-hidden flex-shrink-0">
-                    <img
-                      v-if="order.image_url"
-                      :src="order.image_url"
-                      :alt="order.coffee_name"
-                      class="w-full h-full object-cover"
-                    />
-                    <div v-else class="w-full h-full flex items-center justify-center text-cantina-muted">
-                      <span class="material-icons text-2xl">local_cafe</span>
-                    </div>
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <div class="font-mono font-bold text-cantina-cream uppercase tracking-wider text-lg">{{ order.callsign }}</div>
-                    <div class="text-cantina-muted">{{ order.coffee_name }}</div>
-                    <span
-                      v-if="hasTaskCompleted(order)"
-                      class="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider bg-cantina-success/30 text-cantina-success border border-cantina-success/50"
-                    >
-                      <span class="material-icons text-sm">task_alt</span>
-                      Задание выполнено
-                    </span>
-                  </div>
-                  <div class="flex-shrink-0">
-                    <button
-                      type="button"
-                      :disabled="!!actionId"
-                      class="px-6 py-3 rounded-xl bg-cantina-success hover:opacity-90 disabled:opacity-60 text-white font-mono font-bold uppercase tracking-wider flex items-center justify-center gap-2 min-w-[140px]"
-                      :title="isActionLoading(order.id) ? '…' : 'Выдать гостю'"
-                      @click="handlePickedUp(order)"
-                    >
-                      <span v-if="isActionLoading(order.id)" class="material-icons animate-spin text-xl">hourglass_empty</span>
-                      <span v-else class="material-icons text-xl">check_circle</span>
-                      <span>{{ isActionLoading(order.id) ? '…' : 'Выдать' }}</span>
-                    </button>
-                  </div>
-                </div>
-              </li>
-            </ul>
-          </div>
-        </section>
+        <p v-if="!preparing.length" class="text-cantina-muted py-8 text-center">Очередь пуста.</p>
       </template>
-
-      <!-- Модалка «Ваш заказ готов» после нажатия Готово -->
-      <Teleport to="body">
-        <Transition name="modal">
-          <div
-            v-if="orderReadyModalOrder"
-            class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="order-ready-title"
-            @click.self="closeOrderReadyModal"
-          >
-            <div
-              class="rounded-2xl bg-cantina-card border-2 border-cantina-success/60 shadow-2xl max-w-sm w-full overflow-hidden text-center"
-              @click.stop
-            >
-              <div class="p-8">
-                <div class="w-24 h-24 mx-auto rounded-full bg-cantina-surface overflow-hidden flex-shrink-0 border-2 border-cantina-copper/40 mb-4">
-                  <img
-                    v-if="orderReadyModalOrder.avatar_url"
-                    :src="orderReadyModalOrder.avatar_url"
-                    :alt="orderReadyModalOrder.callsign"
-                    class="w-full h-full object-cover"
-                  />
-                  <div v-else class="w-full h-full flex items-center justify-center text-cantina-muted font-bold text-2xl">
-                    {{ (orderReadyModalOrder.callsign || '?').slice(0, 2) }}
-                  </div>
-                </div>
-                <h2 id="order-ready-title" class="font-mono font-bold text-cantina-cream uppercase tracking-wider text-xl mb-2">
-                  {{ orderReadyModalOrder.callsign }}
-                </h2>
-                <p class="text-cantina-success text-lg font-semibold mb-6">Ваш заказ готов</p>
-                <button
-                  type="button"
-                  class="btn-cantina-primary w-full py-3 rounded-xl font-mono font-bold uppercase tracking-wider"
-                  @click="closeOrderReadyModal"
-                >
-                  Закрыть
-                </button>
-              </div>
-            </div>
-          </div>
-        </Transition>
-      </Teleport>
     </div>
   </div>
 </template>
-
-<style scoped>
-.modal-enter-active,
-.modal-leave-active {
-  transition: opacity 0.2s ease;
-}
-.modal-enter-from,
-.modal-leave-to {
-  opacity: 0;
-}
-</style>
