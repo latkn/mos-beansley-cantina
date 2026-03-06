@@ -5,11 +5,9 @@ import { useI18n } from '@/i18n'
 import { createGuest, getRecentGuests, updateGuest } from '@/api/guests'
 import { getRecommendedCoffeesByProfile, getCoffeeMenu } from '@/api/coffee'
 import { createOrder, getOrdersByGuestId } from '@/api/orders'
-import { getRandomQuestions } from '@/api/questions'
 import { getAllergens } from '@/api/allergens'
 import { getRaces } from '@/api/races'
-import { calculateProfileFromAnswers } from '@/lib/quizProfile'
-import { getRaceIdFromProfile, getRaceNameBySlug, getRaceSlugFromProfile } from '@/lib/raceFromProfile'
+import { getRaceIdFromProfile } from '@/lib/raceFromProfile'
 import GuestCard from '@/components/GuestCard.vue'
 
 const router = useRouter()
@@ -23,29 +21,28 @@ const photoDataUrl = ref('')
 const result = ref(null)
 const allergiesInput = ref('')
 const isSubmitting = ref(false)
-const quizQuestions = ref([])
-const quizAnswers = ref([])
-const quizStep = ref(0)
-const showQuiz = ref(false)
-const selectedQuizAnswerId = ref(null)
 const allergensList = ref([])
 const showAllergiesStep = ref(false)
 const selectedAllergenLabels = ref([])
 const allergiesExtraInput = ref('')
+/** Ползунки: сладость и экспериментальность (0–10), по ним подбирается напиток */
+const sliderSweetness = ref(5)
+const sliderExtremeness = ref(5)
+/** Три рекомендуемых напитка для выбора гостя; выбранный уходит баристе */
+const recommendedDrinks = ref([])
+const selectedDrink = ref(null)
+const isLoadingDrinks = ref(false)
 const videoRef = ref(null)
 const canvasRef = ref(null)
 const scanCountdown = ref(0) // 0 = idle, 3/2/1 = countdown
+/** Камера недоступна (нет HTTPS, отказ в доступе и т.д.) — показываем подсказку */
+const cameraError = ref('')
 let countdownTimerId = null
 const recentGuests = ref([])
 const selectedExistingGuest = ref(null)
 const showGuestDetailView = ref(false)
 const guestOrders = ref([])
 const registeredMessage = ref('')
-/** Модальное сообщение после квиза: раса + подбор напитка. Закрывается только по кнопке «Хорошо». */
-const showRaceResultModal = ref(false)
-const raceResultRaceName = ref('')
-/** После аллергий: шаг корректировки 4 параметров перед подбором напитка */
-const showProfileAdjustStep = ref(false)
 const editableProfile = ref({ sweetness: 5, bitterness: 5, intensity: 5, extremeness: 5 })
 /** После фото (новая регистрация): показать ввод позывного перед квизом */
 const showCallsignAfterPhoto = ref(false)
@@ -81,10 +78,24 @@ onMounted(() => {
 })
 
 watch(step, async (s) => {
-  if (s === 1 && !photoDataUrl.value && !streamRef) await startCamera()
+  if (s === 1 && !photoDataUrl.value && !streamRef) {
+    cameraError.value = ''
+    await startCamera()
+  }
 })
 
 async function startCamera() {
+  cameraError.value = ''
+  if (!navigator.mediaDevices?.getUserMedia) {
+    streamRef = null
+    cameraError.value = 'no-api'
+    return
+  }
+  if (!window.isSecureContext) {
+    streamRef = null
+    cameraError.value = 'not-secure'
+    return
+  }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
     streamRef = stream
@@ -94,6 +105,7 @@ async function startCamera() {
     }
   } catch (e) {
     streamRef = null
+    cameraError.value = e?.name === 'NotAllowedError' ? 'denied' : 'failed'
   }
 }
 
@@ -138,6 +150,8 @@ function fallbackFileInput() {
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = 'image/*'
+  // На мобильных с capture браузер может предложить «Сделать фото» и открыть камеру
+  input.setAttribute('capture', 'user')
   input.onchange = (ev) => {
     const f = ev.target.files?.[0]
     if (f) {
@@ -150,6 +164,7 @@ function fallbackFileInput() {
 }
 
 async function capturePhoto() {
+  cameraError.value = ''
   try {
     if (!streamRef) await startCamera()
     if (!streamRef) {
@@ -158,12 +173,9 @@ async function capturePhoto() {
     }
     startCountdownThenCapture()
   } catch (e) {
+    cameraError.value = 'failed'
     fallbackFileInput()
   }
-}
-
-function closeRaceResultModal() {
-  showRaceResultModal.value = false
 }
 
 onUnmounted(() => {
@@ -198,21 +210,11 @@ async function startOrderFlowForExistingGuest() {
   if (!guest) return
   isLoadingOrderFlow.value = true
   try {
-    const [questions, allergens] = await Promise.all([getRandomQuestions(5), getAllergens()])
-    allergensList.value = allergens
-    if (questions.length > 0) {
-      quizQuestions.value = questions
-      quizStep.value = 0
-      quizAnswers.value = []
-      result.value = null
-      showQuiz.value = true
-      showAllergiesStep.value = false
-      selectedQuizAnswerId.value = null
-    } else {
-      showQuiz.value = false
-      showAllergiesStep.value = true
-      result.value = null
-    }
+    allergensList.value = await getAllergens()
+    result.value = null
+    showAllergiesStep.value = true
+    sliderSweetness.value = Number(guest.sweetness) >= 0 ? guest.sweetness : 5
+    sliderExtremeness.value = Number(guest.extremeness) >= 0 ? guest.extremeness : 5
     showGuestDetailView.value = false
   } finally {
     isLoadingOrderFlow.value = false
@@ -253,48 +255,16 @@ function acceptCallsignAndContinue() {
 async function nextPhoto() {
   isLoadingNextStep.value = true
   try {
-    const [allergens, questions] = await Promise.all([getAllergens(), getRandomQuestions(5)])
-    allergensList.value = allergens
+    allergensList.value = await getAllergens()
     selectedAllergenLabels.value = []
     allergiesExtraInput.value = ''
-    if (questions.length > 0) {
-      quizQuestions.value = questions
-      quizStep.value = 0
-      quizAnswers.value = []
-      showQuiz.value = true
-      showAllergiesStep.value = false
-      result.value = null
-      selectedQuizAnswerId.value = null
-    } else {
-      showQuiz.value = false
-      showAllergiesStep.value = true
-      result.value = null
-    }
+    showAllergiesStep.value = true
+    result.value = null
+    sliderSweetness.value = 5
+    sliderExtremeness.value = 5
     step.value = 2
   } finally {
     isLoadingNextStep.value = false
-  }
-}
-
-function getCurrentQuizQuestion() {
-  return quizQuestions.value[quizStep.value] ?? null
-}
-
-function selectQuizAnswer(answer) {
-  selectedQuizAnswerId.value = answer.id
-}
-
-async function nextQuizQuestion() {
-  const q = getCurrentQuizQuestion()
-  const answer = q?.quiz_answers?.find((a) => a.id === selectedQuizAnswerId.value)
-  if (!q || !answer) return
-  quizAnswers.value.push({ question: q, answer })
-  selectedQuizAnswerId.value = null
-  if (quizStep.value + 1 >= quizQuestions.value.length) {
-    showQuiz.value = false
-    showAllergiesStep.value = true
-  } else {
-    quizStep.value += 1
   }
 }
 
@@ -307,6 +277,18 @@ function toggleAllergen(label) {
   }
 }
 
+/** Строим профиль по ползункам: сладость и экспериментальность. Горечь = 10 - сладость, интенсивность = экспериментальность */
+function buildProfileFromSliders() {
+  const s = Math.min(10, Math.max(0, Number(sliderSweetness.value) || 5))
+  const e = Math.min(10, Math.max(0, Number(sliderExtremeness.value) || 5))
+  return {
+    sweetness: s,
+    bitterness: 10 - s,
+    intensity: e,
+    extremeness: e,
+  }
+}
+
 async function confirmAllergiesStep() {
   const selected = [...selectedAllergenLabels.value]
   const extra = parseAllergies(allergiesExtraInput.value)
@@ -314,31 +296,16 @@ async function confirmAllergiesStep() {
   allergiesInput.value = allergies.join(', ')
   showAllergiesStep.value = false
 
-  if (quizAnswers.value.length > 0) {
-    const payload = quizAnswers.value.map(({ question, answer }) => ({ question, answer }))
-    const { normalized: profile } = calculateProfileFromAnswers(payload)
-    editableProfile.value = {
-      sweetness: profile.sweetness,
-      bitterness: profile.bitterness,
-      intensity: profile.intensity,
-      extremeness: profile.extremeness,
-    }
-  } else {
-    editableProfile.value = { sweetness: 5, bitterness: 5, intensity: 5, extremeness: 5 }
-  }
-  showProfileAdjustStep.value = true
-}
-
-async function confirmProfileAndContinue() {
-  const profile = { ...editableProfile.value }
-  showProfileAdjustStep.value = false
+  const profile = buildProfileFromSliders()
+  editableProfile.value = { ...profile }
   result.value = defaultResult()
+  // Сразу показываем экран «Выберите напиток» с загрузчиком, чтобы не мелькало «Продолжить к стойке»
+  isLoadingDrinks.value = true
+  selectedDrink.value = null
+  recommendedDrinks.value = []
 
   const races = await getRaces()
   const raceId = getRaceIdFromProfile(profile, races)
-  const slug = getRaceSlugFromProfile(profile)
-  const race = races.find((r) => r.slug === slug)
-  raceResultRaceName.value = race?.name ?? getRaceNameBySlug(slug)
 
   if (selectedExistingGuest.value) {
     try {
@@ -353,19 +320,27 @@ async function confirmProfileAndContinue() {
     } catch (_) {}
   }
 
-  showRaceResultModal.value = true
+  // Подгружаем три рекомендуемых напитка для выбора гостя — показываем их сразу, без модалки «раса»
+  try {
+    const allergies = parseAllergies(allergiesInput.value)
+    let list = await getRecommendedCoffeesByProfile(profile, allergies, 3)
+    if (list.length === 0) {
+      const menu = await getCoffeeMenu()
+      list = menu.slice(0, 3)
+    }
+    recommendedDrinks.value = list
+  } finally {
+    isLoadingDrinks.value = false
+  }
 }
 
-
-async function assignDrinkAndCreateOrder(guestId, profileOverride = null) {
+async function assignDrinkAndCreateOrder(guestId, profileOverride = null, chosenCoffee = null) {
+  if (chosenCoffee) {
+    await createOrder(guestId, chosenCoffee)
+    return
+  }
   const allergies = parseAllergies(allergiesInput.value)
-  const profile = profileOverride ?? (quizAnswers.value.length > 0
-    ? (() => {
-        const payload = quizAnswers.value.map(({ question, answer }) => ({ question, answer }))
-        const { normalized } = calculateProfileFromAnswers(payload)
-        return normalized
-      })()
-    : { sweetness: 5, bitterness: 5, intensity: 5, extremeness: 5 })
+  const profile = profileOverride ?? editableProfile.value
   let list = await getRecommendedCoffeesByProfile(profile, allergies, 1)
   if (list.length === 0) {
     const menu = await getCoffeeMenu()
@@ -376,15 +351,35 @@ async function assignDrinkAndCreateOrder(guestId, profileOverride = null) {
   }
 }
 
-async function submitRegistration() {
-  if (!result.value || isSubmitting.value) return
+/** После выбора напитка сразу создаём гостя/заказ и переходим на табло */
+async function onDrinkSelected(drink) {
+  const profile = editableProfile.value
+  if (selectedExistingGuest.value) {
+    if (isFinishingExisting.value) return
+    isFinishingExisting.value = true
+    try {
+      await updateGuest(selectedExistingGuest.value.id, {
+        allergies: parseAllergies(allergiesInput.value),
+        sweetness: profile.sweetness,
+        bitterness: profile.bitterness,
+        intensity: profile.intensity,
+        extremeness: profile.extremeness,
+      })
+      await assignDrinkAndCreateOrder(selectedExistingGuest.value.id, profile, drink)
+      restart()
+      router.push({ name: 'Board' })
+    } catch (e) {
+      callsignError.value = e?.message || t('register.registrationError')
+    } finally {
+      isFinishingExisting.value = false
+    }
+    return
+  }
+  if (isSubmitting.value) return
   isSubmitting.value = true
   callsignError.value = ''
   try {
-    const finalCallsign = selectedExistingGuest.value
-      ? selectedExistingGuest.value.callsign
-      : (callsign.value.trim().toUpperCase() || generateCallsign())
-    const profile = editableProfile.value
+    const finalCallsign = callsign.value.trim().toUpperCase() || generateCallsign()
     const payload = {
       callsign: finalCallsign,
       avatar_url: photoDataUrl.value || null,
@@ -397,9 +392,9 @@ async function submitRegistration() {
     const races = await getRaces()
     payload.race_id = getRaceIdFromProfile(profile, races)
     const guest = await createGuest(payload)
-    await assignDrinkAndCreateOrder(guest.id, profile)
+    await assignDrinkAndCreateOrder(guest.id, profile, drink)
     restart()
-    router.push({ name: 'Register' })
+    router.push({ name: 'Board' })
   } catch (e) {
     callsignError.value = e?.message || t('register.registrationError')
   } finally {
@@ -408,28 +403,26 @@ async function submitRegistration() {
 }
 
 function restart() {
-  closeRaceResultModal()
   step.value = 0
   landingChoice.value = null
   returningSearchQuery.value = ''
   callsign.value = ''
   photoDataUrl.value = ''
   result.value = null
-  quizQuestions.value = []
-  quizAnswers.value = []
-  quizStep.value = 0
-  showQuiz.value = false
   showAllergiesStep.value = false
-  showProfileAdjustStep.value = false
   editableProfile.value = { sweetness: 5, bitterness: 5, intensity: 5, extremeness: 5 }
+  sliderSweetness.value = 5
+  sliderExtremeness.value = 5
+  recommendedDrinks.value = []
+  selectedDrink.value = null
   showGuestDetailView.value = false
   guestOrders.value = []
-  selectedQuizAnswerId.value = null
   allergensList.value = []
   selectedAllergenLabels.value = []
   allergiesExtraInput.value = ''
   selectedExistingGuest.value = null
   showCallsignAfterPhoto.value = false
+  cameraError.value = ''
 }
 
 function chooseReturning() {
@@ -456,58 +449,13 @@ function backToRegisterList() {
 }
 
 async function finishAsExistingGuest() {
-  if (selectedExistingGuest.value) {
-    isFinishingExisting.value = true
-    try {
-      const profile = editableProfile.value
-      await updateGuest(selectedExistingGuest.value.id, {
-        allergies: parseAllergies(allergiesInput.value),
-        sweetness: profile.sweetness,
-        bitterness: profile.bitterness,
-        intensity: profile.intensity,
-        extremeness: profile.extremeness,
-      })
-      await assignDrinkAndCreateOrder(selectedExistingGuest.value.id, profile)
-      restart()
-      router.push({ name: 'Register' })
-    } catch (_) {
-      backToRegisterList()
-    } finally {
-      isFinishingExisting.value = false
-    }
-  } else {
-    backToRegisterList()
-  }
+  if (selectedExistingGuest.value) await onDrinkSelected(selectedDrink.value)
+  else backToRegisterList()
 }
 </script>
 
 <template>
   <div class="min-h-screen bg-cantina-bg text-cantina-cream p-4 md:p-6 font-sans">
-    <!-- Модальное сообщение после квиза: раса + подбор напитка. -->
-    <Teleport to="body">
-      <div
-        v-if="showRaceResultModal"
-        class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
-        @click.self="closeRaceResultModal"
-      >
-        <div class="card-cantina max-w-lg w-full p-8 md:p-10 text-center space-y-8 border-2 border-cantina-copper/80 shadow-cantina-lg">
-          <p class="text-cantina-sand text-sm uppercase tracking-[0.2em] font-mono">{{ t('register.biometryDone') }}</p>
-          <h2 class="font-display text-2xl md:text-4xl font-semibold text-cantina-cream leading-tight">
-            {{ t('register.yourRace') }} <span class="text-cantina-copper">{{ raceResultRaceName }}</span>
-          </h2>
-          <p class="text-xl md:text-2xl text-cantina-cream/90 leading-snug">
-            {{ t('register.drinkWillMatch') }}
-          </p>
-          <button
-            type="button"
-            class="btn-cantina-primary w-full py-4 font-mono text-lg uppercase tracking-wider"
-            @click="closeRaceResultModal"
-          >
-            {{ t('register.ok') }}
-          </button>
-        </div>
-      </div>
-    </Teleport>
     <div class="max-w-lg mx-auto">
       <!-- Экран выбора: уже калиброван или первичная калибровка -->
       <div v-if="step === 0 && landingChoice === null" class="space-y-8 py-4">
@@ -769,7 +717,7 @@ async function finishAsExistingGuest() {
             <p class="text-center text-cantina-muted text-xs py-2 font-mono">{{ t('register.placeInFrame') }}</p>
           </div>
 
-          <div v-if="!photoDataUrl" class="mt-4 flex justify-center">
+          <div v-if="!photoDataUrl" class="mt-4 flex flex-col items-center gap-3">
             <button
               type="button"
               class="btn-cantina-primary px-8 py-4 disabled:opacity-60 disabled:pointer-events-none font-mono font-semibold uppercase tracking-wider"
@@ -777,6 +725,17 @@ async function finishAsExistingGuest() {
               @click="capturePhoto"
             >
               {{ scanCountdown > 0 ? '…' : t('register.takePhoto') }}
+            </button>
+            <p v-if="cameraError" class="text-cantina-amber/90 text-xs font-mono text-center max-w-sm">
+              {{ t('register.cameraError.' + cameraError) }}
+            </p>
+            <button
+              v-if="cameraError"
+              type="button"
+              class="btn-cantina-ghost text-sm font-mono"
+              @click="fallbackFileInput"
+            >
+              {{ t('register.chooseFileInstead') }}
             </button>
           </div>
         </div>
@@ -793,67 +752,35 @@ async function finishAsExistingGuest() {
         </button>
       </div>
 
-      <!-- Step 2: Quiz (вопросы из БД) -->
-      <div v-else-if="step === 2 && showQuiz && getCurrentQuizQuestion()" class="space-y-6">
-        <p class="text-cantina-sand text-sm uppercase tracking-widest font-mono">{{ t('register.quizStep', { n: quizStep + 1, total: quizQuestions.length }) }}</p>
-        <h2 class="text-lg font-mono text-cantina-sand">{{ getCurrentQuizQuestion().text }}</h2>
-        <div class="space-y-3">
-          <label
-            v-for="a in getCurrentQuizQuestion().quiz_answers"
-            :key="a.id"
-            class="block p-4 rounded-lg border cursor-pointer transition card-cantina"
-            :class="selectedQuizAnswerId === a.id
-              ? 'border-cantina-copper bg-cantina-copper/20 text-cantina-cream'
-              : 'border-cantina-border text-cantina-cream hover:border-cantina-border-light'"
-          >
-            <input
-              type="radio"
-              :name="'quiz-' + getCurrentQuizQuestion().id"
-              :value="a.id"
-              :checked="selectedQuizAnswerId === a.id"
-              class="sr-only"
-              @change="selectQuizAnswer(a)"
-            />
-            <span class="font-mono">▢ {{ a.text }}</span>
-          </label>
-        </div>
-        <button
-          type="button"
-          class="btn-cantina-primary w-full py-3 font-mono"
-          :disabled="selectedQuizAnswerId === null"
-          @click="nextQuizQuestion"
-        >
-          {{ t('register.nextQuestion') }}
-        </button>
-      </div>
-
-      <!-- Step 2: Аллергии (крупно в конце опросника) -->
+      <!-- Step 2: Три вопроса — аллергия, сладость, экспериментальность (ползунки) -->
       <div v-else-if="step === 2 && showAllergiesStep" class="space-y-6">
         <p class="text-cantina-sand text-sm uppercase tracking-widest font-mono">{{ t('register.matching') }}</p>
-        <h2 class="font-display text-2xl md:text-3xl font-semibold text-cantina-amber text-center leading-tight">
-          {{ t('register.allergiesIntro') }}
+        <h2 class="font-display text-xl md:text-2xl font-semibold text-cantina-cream leading-tight">
+          {{ t('register.threeQuestionsTitle') }}
         </h2>
-        <p class="text-cantina-muted text-center text-sm">{{ t('register.weWontOffer') }}</p>
-        <div class="grid gap-3 py-2">
-          <label
-            v-for="a in allergensList"
-            :key="a.id"
-            class="flex items-center gap-4 p-4 rounded-xl border cursor-pointer transition text-lg card-cantina"
-            :class="selectedAllergenLabels.includes(a.label)
-              ? 'border-cantina-amber bg-cantina-amber/20 text-cantina-cream'
-              : 'border-cantina-border text-cantina-cream hover:border-cantina-border-light'"
-          >
-            <input
-              type="checkbox"
-              :checked="selectedAllergenLabels.includes(a.label)"
-              class="w-5 h-5 rounded border-cantina-border text-cantina-amber focus:ring-cantina-copper"
-              @change="toggleAllergen(a.label)"
-            />
-            <span class="font-mono">☐ {{ a.label }}</span>
-          </label>
-        </div>
-        <div class="space-y-1">
-          <label class="block text-sm text-cantina-muted">{{ t('register.otherAllergies') }}</label>
+
+        <!-- 1. Аллергия -->
+        <div class="space-y-2">
+          <h3 class="text-cantina-amber font-mono text-sm uppercase tracking-wider">{{ t('register.allergyQuestion') }}</h3>
+          <p class="text-cantina-muted text-sm">{{ t('register.weWontOffer') }}</p>
+          <div class="grid gap-2 py-1">
+            <label
+              v-for="a in allergensList"
+              :key="a.id"
+              class="flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition card-cantina"
+              :class="selectedAllergenLabels.includes(a.label)
+                ? 'border-cantina-amber bg-cantina-amber/20 text-cantina-cream'
+                : 'border-cantina-border text-cantina-cream hover:border-cantina-border-light'"
+            >
+              <input
+                type="checkbox"
+                :checked="selectedAllergenLabels.includes(a.label)"
+                class="w-4 h-4 rounded border-cantina-border text-cantina-amber focus:ring-cantina-copper"
+                @change="toggleAllergen(a.label)"
+              />
+              <span class="font-mono text-sm">☐ {{ a.label }}</span>
+            </label>
+          </div>
           <input
             v-model="allergiesExtraInput"
             type="text"
@@ -861,6 +788,37 @@ async function finishAsExistingGuest() {
             class="w-full px-3 py-2 bg-cantina-surface border border-cantina-border rounded-lg text-cantina-cream placeholder-cantina-muted text-sm focus:outline-none focus:ring-2 focus:ring-cantina-copper"
           />
         </div>
+
+        <!-- 2. Уровень сладости -->
+        <div class="space-y-1">
+          <div class="flex justify-between items-center">
+            <h3 class="text-cantina-amber font-mono text-sm uppercase tracking-wider">{{ t('register.sweetnessQuestion') }}</h3>
+            <span class="font-mono text-cantina-amber">{{ sliderSweetness }}/10</span>
+          </div>
+          <input
+            v-model.number="sliderSweetness"
+            type="range"
+            min="0"
+            max="10"
+            class="w-full h-3 rounded-full appearance-none bg-cantina-surface accent-cantina-amber"
+          />
+        </div>
+
+        <!-- 3. Уровень экспериментальности -->
+        <div class="space-y-1">
+          <div class="flex justify-between items-center">
+            <h3 class="text-cantina-amber font-mono text-sm uppercase tracking-wider">{{ t('register.experimentalnessQuestion') }}</h3>
+            <span class="font-mono text-cantina-amber">{{ sliderExtremeness }}/10</span>
+          </div>
+          <input
+            v-model.number="sliderExtremeness"
+            type="range"
+            min="0"
+            max="10"
+            class="w-full h-3 rounded-full appearance-none bg-cantina-surface accent-cantina-copper"
+          />
+        </div>
+
         <button
           type="button"
           class="btn-cantina-primary w-full py-4 font-mono text-lg"
@@ -870,116 +828,63 @@ async function finishAsExistingGuest() {
         </button>
       </div>
 
-      <!-- Step 2: Корректировка 4 параметров перед подбором напитка -->
-      <div v-else-if="step === 2 && showProfileAdjustStep" class="space-y-6">
-        <p class="text-cantina-sand text-sm uppercase tracking-widest font-mono">{{ t('register.matching') }}</p>
-        <h2 class="font-display text-xl md:text-2xl font-semibold text-cantina-cream leading-tight">
-          {{ t('register.profileTitle') }}
-        </h2>
-        <p class="text-cantina-muted text-sm">{{ t('register.profileAdjustHint') }}</p>
-        <div class="space-y-5">
-          <div>
-            <div class="flex justify-between items-center mb-1">
-              <span class="text-cantina-sand font-mono text-sm">{{ t('register.sweetness') }}</span>
-              <span class="font-mono text-cantina-amber">{{ editableProfile.sweetness }}</span>
-            </div>
-            <input
-              v-model.number="editableProfile.sweetness"
-              type="range"
-              min="0"
-              max="10"
-              class="w-full h-2 rounded-full appearance-none bg-cantina-surface accent-cantina-amber"
-            />
-          </div>
-          <div>
-            <div class="flex justify-between items-center mb-1">
-              <span class="text-cantina-sand font-mono text-sm">{{ t('register.bitterness') }}</span>
-              <span class="font-mono text-cantina-amber">{{ editableProfile.bitterness }}</span>
-            </div>
-            <div class="w-full h-2 rounded-full bg-cantina-surface overflow-hidden">
-              <div
-                class="h-full rounded-full bg-cantina-copper/80 transition-all"
-                :style="{ width: (editableProfile.bitterness / 10) * 100 + '%' }"
-              />
-            </div>
-          </div>
-          <div>
-            <div class="flex justify-between items-center mb-1">
-              <span class="text-cantina-sand font-mono text-sm">{{ t('register.intensity') }}</span>
-              <span class="font-mono text-cantina-amber">{{ editableProfile.intensity }}</span>
-            </div>
-            <div class="w-full h-2 rounded-full bg-cantina-surface overflow-hidden">
-              <div
-                class="h-full rounded-full bg-cantina-copper-light/80 transition-all"
-                :style="{ width: (editableProfile.intensity / 10) * 100 + '%' }"
-              />
-            </div>
-          </div>
-          <div>
-            <div class="flex justify-between items-center mb-1">
-              <span class="text-cantina-sand font-mono text-sm">{{ t('register.extremeness') }}</span>
-              <span class="font-mono text-cantina-amber">{{ editableProfile.extremeness }}</span>
-            </div>
-            <input
-              v-model.number="editableProfile.extremeness"
-              type="range"
-              min="0"
-              max="10"
-              class="w-full h-2 rounded-full appearance-none bg-cantina-surface accent-cantina-copper"
-            />
-          </div>
-        </div>
-        <button
-          type="button"
-          class="btn-cantina-primary w-full py-4 font-mono text-lg uppercase tracking-wider"
-          @click="confirmProfileAndContinue"
-        >
-          {{ selectedExistingGuest ? t('register.confirmProfileExisting') : t('register.confirmProfileNew') }}
-        </button>
-      </div>
-
-      <!-- Step 2: Result (после квиза и аллергий) -->
+      <!-- Step 2: Result — выбор одного из трёх напитков, сразу переход на страницу регистрации -->
       <div v-else-if="step === 2 && result" class="space-y-6">
         <p v-if="callsignError" class="text-cantina-danger font-mono text-sm">{{ callsignError }}</p>
-        <p class="text-cantina-success">{{ t('register.profileAnalyzed') }}</p>
-        <div class="space-y-1">
-          <label class="block text-sm text-cantina-muted">{{ t('register.allergiesLabel') }}</label>
-          <input
-            v-model="allergiesInput"
-            type="text"
-            :placeholder="t('register.allergiesPlaceholder')"
-            class="w-full px-3 py-2 bg-cantina-surface border border-cantina-border rounded-lg text-cantina-cream placeholder-cantina-muted text-sm focus:outline-none focus:ring-2 focus:ring-cantina-copper"
-          />
-        </div>
-        <p class="text-cantina-muted text-sm">{{ t('register.drinkByProfile') }}</p>
-        <GuestCard
-          :guest="{
-            callsign: selectedExistingGuest?.callsign || (callsign.trim().toUpperCase() || t('register.newGuest')),
-            avatar_url: photoDataUrl || selectedExistingGuest?.avatar_url,
-            allergies: parseAllergies(allergiesInput),
-          }"
-        />
-        <template v-if="selectedExistingGuest">
+
+        <!-- Три рекомендации: клик по напитку сразу отправляет заказ и перекидывает на /register -->
+        <template v-if="isLoadingDrinks || recommendedDrinks.length > 0">
+          <p class="text-cantina-success">{{ t('register.profileAnalyzed') }}</p>
+          <h2 class="font-display text-xl font-semibold text-cantina-cream">
+            {{ t('register.chooseDrinkTitle') }}
+          </h2>
+          <p class="text-cantina-muted text-sm">{{ t('register.chooseDrinkSubtitle') }}</p>
+          <div v-if="isLoadingDrinks" class="flex flex-col items-center justify-center py-12 gap-4">
+            <div class="w-10 h-10 border-2 border-cantina-border border-t-cantina-copper rounded-full animate-spin" />
+            <span class="text-sm text-cantina-muted font-mono">{{ t('register.loading') }}</span>
+          </div>
+          <div v-else class="grid gap-3">
+            <button
+              v-for="drink in recommendedDrinks"
+              :key="drink.id"
+              type="button"
+              class="card-cantina flex items-center gap-4 p-4 text-left rounded-xl border-2 transition hover:border-cantina-copper focus:outline-none focus:ring-2 focus:ring-cantina-copper disabled:opacity-60 disabled:pointer-events-none"
+              :disabled="isSubmitting || isFinishingExisting"
+              @click="onDrinkSelected(drink)"
+            >
+              <div class="w-16 h-16 rounded-lg bg-cantina-surface overflow-hidden flex-shrink-0 border border-cantina-border">
+                <img
+                  v-if="drink.image_url"
+                  :src="drink.image_url"
+                  :alt="drink.name"
+                  class="w-full h-full object-cover"
+                />
+                <div v-else class="w-full h-full flex items-center justify-center text-2xl font-mono text-cantina-muted">
+                  {{ (drink.name || '?').slice(0, 1) }}
+                </div>
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="font-mono text-cantina-cream uppercase tracking-wider">{{ drink.name }}</div>
+                <div v-if="drink.description" class="text-sm text-cantina-muted mt-0.5 line-clamp-2">{{ drink.description }}</div>
+              </div>
+            </button>
+          </div>
+        </template>
+
+        <!-- Нет рекомендаций: одна кнопка — подбор автоматически и переход -->
+        <template v-else>
+          <p class="text-cantina-success">{{ t('register.profileAnalyzed') }}</p>
+          <p class="text-cantina-muted text-sm">{{ t('register.noDrinksFallback') }}</p>
           <button
             type="button"
-            class="btn-cantina-secondary w-full py-3 font-mono flex items-center justify-center gap-2 disabled:opacity-70"
-            :disabled="isFinishingExisting"
-            @click="finishAsExistingGuest"
+            class="btn-cantina-primary w-full py-4 font-mono disabled:opacity-70"
+            :disabled="isSubmitting || isFinishingExisting"
+            @click="onDrinkSelected(null)"
           >
-            <span v-if="isFinishingExisting" class="w-5 h-5 border-2 border-cantina-cream/30 border-t-cantina-cream rounded-full animate-spin flex-shrink-0" />
-            <span>{{ isFinishingExisting ? t('register.saving') : t('register.doneBackToBooth') }}</span>
+            <span v-if="isSubmitting || isFinishingExisting" class="w-5 h-5 border-2 border-cantina-cream/30 border-t-cantina-cream rounded-full animate-spin flex-shrink-0 inline-block align-middle mr-2" />
+            {{ isSubmitting || isFinishingExisting ? t('register.saving') : t('register.continueToBooth') }}
           </button>
         </template>
-        <button
-          v-else
-          type="button"
-          class="btn-cantina-primary w-full py-3 font-mono flex items-center justify-center gap-2 disabled:opacity-70"
-          :disabled="isSubmitting"
-          @click="submitRegistration"
-        >
-          <span v-if="isSubmitting" class="w-5 h-5 border-2 border-cantina-cream/30 border-t-cantina-cream rounded-full animate-spin flex-shrink-0" />
-          <span>{{ isSubmitting ? t('register.saving') : t('register.finishRegistration') }}</span>
-        </button>
       </div>
     </div>
   </div>

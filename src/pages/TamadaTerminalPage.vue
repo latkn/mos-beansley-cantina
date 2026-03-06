@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { getOrdersInQueue, subscribeOrders } from '@/api/orders'
 import {
   getActivePlanets,
-  getGuestsInActivePlanetsIds,
+  getGuestsUnavailableForPlanetIds,
   getExtremenessLevel,
   getExtremenessLevelName,
   createPlanetFromGuests,
@@ -14,7 +14,7 @@ import { getRandomTamadaTaskByLevel, difficultyToExtremenessLevel } from '@/api/
 
 const ordersInQueue = ref([])
 const activePlanets = ref([])
-const guestsInActiveIds = ref(new Set())
+const guestsUnavailableIds = ref(new Set())
 const selectedGuestIds = ref(new Set()) // { level: Set<guest_id> } or just Set for "all selected per level"
 const launching = ref(false)
 const completingPlanetId = ref(null)
@@ -28,13 +28,13 @@ async function loadAll() {
   ])
   ordersInQueue.value = orders
   activePlanets.value = planets
-  const ids = await getGuestsInActivePlanetsIds()
-  guestsInActiveIds.value = ids
+  const ids = await getGuestsUnavailableForPlanetIds()
+  guestsUnavailableIds.value = ids
 }
 
 /** Три группы по уровню экстрима. В каждой — заказы (гости в очереди, не в активной планете). */
 const queueByExtremenessLevel = computed(() => {
-  const inActive = guestsInActiveIds.value
+  const inActive = guestsUnavailableIds.value
   const levels = [
     { level: 1, name: getExtremenessLevelName(1), orders: [] },
     { level: 2, name: getExtremenessLevelName(2), orders: [] },

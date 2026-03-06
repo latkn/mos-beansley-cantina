@@ -191,6 +191,17 @@ onUnmounted(() => {
           <p v-if="!readyForPickup.length" class="text-cantina-muted py-8 text-center">Пусто</p>
         </section>
       </div>
+
+      <div class="mt-10 pb-8 sticky bottom-4">
+        <div class="bg-cantina-bg/70 backdrop-blur-sm rounded-xl border border-cantina-border p-3">
+          <router-link
+            to="/register"
+            class="btn-cantina-primary w-full py-6 font-mono text-xl uppercase tracking-wider text-center block"
+          >
+            Регистрация
+          </router-link>
+        </div>
+      </div>
     </div>
   </div>
 </template>

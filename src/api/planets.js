@@ -38,8 +38,8 @@ function randomName() {
 
 export async function createPlanet() {
   const allGuests = await getRecentGuests(200)
-  const activePlanetIds = await getActivePlanetMemberGuestIds()
-  const available = allGuests.filter((g) => !activePlanetIds.has(g.id))
+  const unavailableIds = await getGuestsUnavailableForPlanetIds()
+  const available = allGuests.filter((g) => !unavailableIds.has(g.id))
   const count = Math.min(6, Math.max(3, available.length))
   const selected = available.sort(() => Math.random() - 0.5).slice(0, count)
   const name = randomName()
@@ -76,9 +76,68 @@ async function getActivePlanetMemberGuestIds() {
   return new Set((members ?? []).map((m) => m.guest_id))
 }
 
+/**
+ * Гости, выполнившие задание и ещё не прошедшие регистрацию после этого.
+ * Не показываются в кружках и не попадают в новые планеты до новой регистрации.
+ */
+async function getGuestIdsBlockedFromPlanet() {
+  if (!isSupabaseAvailable() || !supabase) return new Set()
+  const { data: completedPlanets } = await supabase
+    .from('planets')
+    .select('id, completed_at')
+    .eq('status', 'completed')
+  if (!completedPlanets?.length) return new Set()
+  const planetIds = completedPlanets.map((p) => p.id)
+  const completedAtByPlanet = new Map(
+    completedPlanets.map((p) => [p.id, p.completed_at ? new Date(p.completed_at).getTime() : 0])
+  )
+  const { data: members } = await supabase
+    .from('planet_members')
+    .select('guest_id, planet_id')
+    .in('planet_id', planetIds)
+  if (!members?.length) return new Set()
+  const guestIds = [...new Set(members.map((m) => m.guest_id))]
+  let guestsRes = await supabase.from('guests').select('id, last_registration_at').in('id', guestIds)
+  if (guestsRes.error && /schema cache|last_registration_at|column.*not found/i.test(guestsRes.error?.message || '')) {
+    guestsRes = await supabase.from('guests').select('id').in('id', guestIds)
+  }
+  if (guestsRes.error) return new Set()
+  const guests = guestsRes.data ?? []
+  const lastRegByGuest = new Map(
+    guests.map((g) => [g.id, g.last_registration_at ? new Date(g.last_registration_at).getTime() : Infinity])
+  )
+  const maxCompletedAtByGuest = new Map()
+  for (const m of members) {
+    const t = completedAtByPlanet.get(m.planet_id) ?? 0
+    const cur = maxCompletedAtByGuest.get(m.guest_id) ?? 0
+    if (t > cur) maxCompletedAtByGuest.set(m.guest_id, t)
+  }
+  const blocked = new Set()
+  for (const gid of guestIds) {
+    const lastReg = lastRegByGuest.get(gid) ?? 0
+    const maxCompleted = maxCompletedAtByGuest.get(gid) ?? 0
+    if (lastReg <= maxCompleted) blocked.add(gid)
+  }
+  return blocked
+}
+
 /** Множество guest_id, которые уже в какой-либо активной планете (для исключения из кружков рас). */
 export async function getGuestsInActivePlanetsIds() {
   return getActivePlanetMemberGuestIds()
+}
+
+/**
+ * Гости, которые не должны показываться в кружках и при создании планет:
+ * в активной планете ИЛИ выполнили задание и ещё не проходили регистрацию после этого.
+ */
+export async function getGuestsUnavailableForPlanetIds() {
+  const [inActive, blocked] = await Promise.all([
+    getActivePlanetMemberGuestIds(),
+    getGuestIdsBlockedFromPlanet(),
+  ])
+  const out = new Set(inActive)
+  for (const id of blocked) out.add(id)
+  return out
 }
 
 export async function assignPlanetTask(planetId, taskText) {

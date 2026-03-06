@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { getOrdersInQueue, subscribeOrders } from '@/api/orders'
 import {
   getActivePlanets,
-  getGuestsInActivePlanetsIds,
+  getGuestsUnavailableForPlanetIds,
   getExtremenessLevel,
   getExtremenessLevelName,
   completePlanet,
@@ -15,7 +15,7 @@ const STAFF_CODE = '2187'
 
 const ordersInQueue = ref([])
 const activePlanets = ref([])
-const guestsInActiveIds = ref(new Set())
+const guestsUnavailableIds = ref(new Set())
 const modalPlanet = ref(null)
 const modalOpen = ref(false)
 const now = ref(Date.now())
@@ -57,13 +57,13 @@ async function loadAll() {
   ])
   ordersInQueue.value = orders
   activePlanets.value = planets
-  const ids = await getGuestsInActivePlanetsIds()
-  guestsInActiveIds.value = ids
+  const ids = await getGuestsUnavailableForPlanetIds()
+  guestsUnavailableIds.value = ids
 }
 
 /** Три планеты по уровню экстрима (1 — лёгкий, 2 — медиум, 3 — экстремальный). Только гости в очереди, не в активной планете. */
 const queueByExtremenessLevel = computed(() => {
-  const inActive = guestsInActiveIds.value
+  const inActive = guestsUnavailableIds.value
   const levels = [
     { level: 1, name: getExtremenessLevelName(1), orders: [] },
     { level: 2, name: getExtremenessLevelName(2), orders: [] },

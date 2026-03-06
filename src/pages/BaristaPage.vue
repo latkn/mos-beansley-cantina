@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   getPendingOrders,
   getReadyForPickupOrders,
@@ -12,6 +13,7 @@ import {
 import { getRecommendedCoffeesWithScores } from '@/api/coffee'
 import { getGuestIdsWithCompletedTask } from '@/api/planets'
 
+const router = useRouter()
 const preparing = ref([])
 const guestIdsTaskCompleted = ref(new Set())
 const readyForPickup = ref([])
@@ -26,6 +28,8 @@ const orderDrinkOptions = ref({})
 const guestTriedCoffeeIdsByOrder = ref({})
 /** Какой напиток бариста смотрит (клик по карточке): orderId -> drink. Закрепление — только по кнопке «Выбрать». */
 const previewDrinkByOrder = ref({})
+/** Заказ, для которого показываем модалку «Ваш заказ готов» (после нажатия Готово). */
+const orderReadyModalOrder = ref(null)
 
 async function load() {
   loading.value = true
@@ -155,6 +159,11 @@ async function handleReady(order) {
   try {
     callGuest(order)
     await markOrderReady(order.id)
+    orderReadyModalOrder.value = {
+      callsign: order.callsign,
+      avatar_url: order.guest?.avatar_url,
+    }
+    playOrderReadySound()
     await load()
   } catch (e) {
     console.error(e)
@@ -162,6 +171,20 @@ async function handleReady(order) {
   } finally {
     actionId.value = null
   }
+}
+
+const ORDER_READY_SOUND_URL = '/sound-on-the-trumpet.mp3'
+
+function playOrderReadySound() {
+  try {
+    const audio = new Audio(ORDER_READY_SOUND_URL)
+    audio.play().catch(() => {})
+  } catch (_) {}
+}
+
+function closeOrderReadyModal() {
+  orderReadyModalOrder.value = null
+  router.push('/register')
 }
 
 async function handlePickedUp(order) {
@@ -451,20 +474,12 @@ onUnmounted(() => {
                       class="mt-4 p-4 rounded-xl bg-cantina-surface border border-cantina-border"
                     >
                       <div class="text-cantina-copper font-mono font-bold mb-2">{{ getPreviewDrink(order.id).name }} — просмотр</div>
-                      <div v-if="(getPreviewDrink(order.id).ingredients || []).length" class="mb-2">
-                        <span class="text-cantina-muted text-xs uppercase">Состав:</span>
-                        <p class="text-cantina-cream">{{ (getPreviewDrink(order.id).ingredients || []).join(', ') }}</p>
+                      <div v-if="(getPreviewDrink(order.id).ingredients || []).length">
+                        <span class="text-cantina-muted text-xs uppercase">Ингредиенты:</span>
+                        <p class="text-cantina-cream mt-0.5">{{ (getPreviewDrink(order.id).ingredients || []).join(', ') }}</p>
                       </div>
-                      <div v-if="getPreviewDrink(order.id).prep_instructions" class="mb-2">
-                        <span class="text-cantina-muted text-xs uppercase">Инструкция для бариста:</span>
-                        <p class="text-cantina-cream whitespace-pre-wrap text-sm mt-0.5">{{ getPreviewDrink(order.id).prep_instructions }}</p>
-                      </div>
-                      <p v-if="!(getPreviewDrink(order.id).ingredients || []).length && !getPreviewDrink(order.id).prep_instructions" class="text-cantina-muted text-sm">Нет состава и инструкции.</p>
+                      <p v-else class="text-cantina-muted text-sm">Нет состава.</p>
                     </div>
-                  </div>
-                  <div v-if="order.prep_instructions" class="mt-6 p-4 rounded-xl bg-cantina-surface border border-cantina-border">
-                    <div class="text-cantina-muted text-sm uppercase tracking-wider mb-2">Инструкция</div>
-                    <p class="text-lg text-cantina-cream whitespace-pre-wrap leading-relaxed">{{ order.prep_instructions }}</p>
                   </div>
                 </div>
               </template>
@@ -544,6 +559,61 @@ onUnmounted(() => {
           </div>
         </section>
       </template>
+
+      <!-- Модалка «Ваш заказ готов» после нажатия Готово -->
+      <Teleport to="body">
+        <Transition name="modal">
+          <div
+            v-if="orderReadyModalOrder"
+            class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="order-ready-title"
+            @click.self="closeOrderReadyModal"
+          >
+            <div
+              class="rounded-2xl bg-cantina-card border-2 border-cantina-success/60 shadow-2xl max-w-sm w-full overflow-hidden text-center"
+              @click.stop
+            >
+              <div class="p-8">
+                <div class="w-24 h-24 mx-auto rounded-full bg-cantina-surface overflow-hidden flex-shrink-0 border-2 border-cantina-copper/40 mb-4">
+                  <img
+                    v-if="orderReadyModalOrder.avatar_url"
+                    :src="orderReadyModalOrder.avatar_url"
+                    :alt="orderReadyModalOrder.callsign"
+                    class="w-full h-full object-cover"
+                  />
+                  <div v-else class="w-full h-full flex items-center justify-center text-cantina-muted font-bold text-2xl">
+                    {{ (orderReadyModalOrder.callsign || '?').slice(0, 2) }}
+                  </div>
+                </div>
+                <h2 id="order-ready-title" class="font-mono font-bold text-cantina-cream uppercase tracking-wider text-xl mb-2">
+                  {{ orderReadyModalOrder.callsign }}
+                </h2>
+                <p class="text-cantina-success text-lg font-semibold mb-6">Ваш заказ готов</p>
+                <button
+                  type="button"
+                  class="btn-cantina-primary w-full py-3 rounded-xl font-mono font-bold uppercase tracking-wider"
+                  @click="closeOrderReadyModal"
+                >
+                  Закрыть
+                </button>
+              </div>
+            </div>
+          </div>
+        </Transition>
+      </Teleport>
     </div>
   </div>
 </template>
+
+<style scoped>
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 0.2s ease;
+}
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+</style>

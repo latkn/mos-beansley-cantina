@@ -1,23 +1,35 @@
 import { supabase, isSupabaseAvailable } from '@/lib/supabase'
 import * as idb from '@/lib/idb'
 
+function isSchemaCacheError(e) {
+  const msg = e?.message || ''
+  return /schema cache|last_registration_at|column.*not found/i.test(msg)
+}
+
 export async function createGuest(data) {
   if (isSupabaseAvailable()) {
     const payload = {
       callsign: data.callsign.trim().toUpperCase(),
       avatar_url: data.avatar_url ?? null,
       allergies: Array.isArray(data.allergies) ? data.allergies : (data.allergies ? [data.allergies] : []),
+      last_registration_at: new Date().toISOString(),
     }
     if (data.sweetness != null) payload.sweetness = data.sweetness
     if (data.bitterness != null) payload.bitterness = data.bitterness
     if (data.intensity != null) payload.intensity = data.intensity
     if (data.extremeness != null) payload.extremeness = data.extremeness
     if (data.race_id != null) payload.race_id = data.race_id
-    const { data: guest, error } = await supabase
+    let { data: guest, error } = await supabase
       .from('guests')
       .insert(payload)
       .select()
       .single()
+    if (error && isSchemaCacheError(error)) {
+      const { last_registration_at: _, ...payloadWithoutLra } = payload
+      const retry = await supabase.from('guests').insert(payloadWithoutLra).select().single()
+      if (retry.error) throw retry.error
+      return retry.data
+    }
     if (error) throw error
     return guest
   }
@@ -41,12 +53,19 @@ export async function createGuest(data) {
 
 export async function updateGuest(id, data) {
   if (isSupabaseAvailable()) {
-    const { data: guest, error } = await supabase
+    const payload = { ...data, last_registration_at: new Date().toISOString() }
+    let { data: guest, error } = await supabase
       .from('guests')
-      .update(data)
+      .update(payload)
       .eq('id', id)
       .select()
       .single()
+    if (error && isSchemaCacheError(error)) {
+      const { last_registration_at: _, ...payloadWithoutLra } = payload
+      const retry = await supabase.from('guests').update(payloadWithoutLra).eq('id', id).select().single()
+      if (retry.error) throw retry.error
+      return retry.data
+    }
     if (error) throw error
     return guest
   }

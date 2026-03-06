@@ -14,7 +14,7 @@ onMounted(() => {
     <nav class="border-b border-cantina-border bg-cantina-surface/95 px-4 py-2.5 flex flex-wrap items-center gap-4 font-mono text-sm">
       <div class="flex flex-wrap gap-4">
         <router-link
-          to="/register"
+          to="/"
           class="text-cantina-sand hover:text-cantina-copper-light transition-colors"
         >
           Регистрация
