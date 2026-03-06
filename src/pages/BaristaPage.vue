@@ -1,6 +1,5 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
 import {
   getPendingOrders,
   getReadyForPickupOrders,
@@ -13,7 +12,6 @@ import {
 import { getRecommendedCoffeesWithScores } from '@/api/coffee'
 import { getGuestIdsWithCompletedTask } from '@/api/planets'
 
-const router = useRouter()
 const preparing = ref([])
 const guestIdsTaskCompleted = ref(new Set())
 const readyForPickup = ref([])
@@ -184,7 +182,6 @@ function playOrderReadySound() {
 
 function closeOrderReadyModal() {
   orderReadyModalOrder.value = null
-  router.push('/register')
 }
 
 async function handlePickedUp(order) {
