@@ -9,7 +9,7 @@ import { getRandomQuestions } from '@/api/questions'
 import { getAllergens } from '@/api/allergens'
 import { getRaces } from '@/api/races'
 import { calculateProfileFromAnswers } from '@/lib/quizProfile'
-import { getRaceIdFromProfile, getRaceSlugFromProfile } from '@/lib/raceFromProfile'
+import { getRaceIdFromProfile, getRaceNameBySlug, getRaceSlugFromProfile } from '@/lib/raceFromProfile'
 import GuestCard from '@/components/GuestCard.vue'
 
 const router = useRouter()
@@ -338,7 +338,7 @@ async function confirmProfileAndContinue() {
   const raceId = getRaceIdFromProfile(profile, races)
   const slug = getRaceSlugFromProfile(profile)
   const race = races.find((r) => r.slug === slug)
-  raceResultRaceName.value = race?.name ?? t('register.raceNotDefined')
+  raceResultRaceName.value = race?.name ?? getRaceNameBySlug(slug)
 
   if (selectedExistingGuest.value) {
     try {
@@ -398,7 +398,8 @@ async function submitRegistration() {
     payload.race_id = getRaceIdFromProfile(profile, races)
     const guest = await createGuest(payload)
     await assignDrinkAndCreateOrder(guest.id, profile)
-    router.push({ name: 'Guest', params: { callsign: guest.callsign } })
+    restart()
+    router.push({ name: 'Register' })
   } catch (e) {
     callsignError.value = e?.message || t('register.registrationError')
   } finally {
@@ -467,7 +468,8 @@ async function finishAsExistingGuest() {
         extremeness: profile.extremeness,
       })
       await assignDrinkAndCreateOrder(selectedExistingGuest.value.id, profile)
-      router.push({ name: 'Guest', params: { callsign: selectedExistingGuest.value.callsign } })
+      restart()
+      router.push({ name: 'Register' })
     } catch (_) {
       backToRegisterList()
     } finally {

@@ -13,6 +13,23 @@ export const RACE_CENTROIDS = {
   tauri: { sweetness: 5, bitterness: 5, intensity: 5, extremeness: 4 },    // баланс
 }
 
+/** Локальные названия рас по slug (fallback, если API рас не вернул данные). */
+export const RACE_SLUG_NAMES = {
+  vorloki: 'Ворлоки',
+  keldari: 'Келдари',
+  zorg: 'Зорги',
+  tauri: "Тау'ри",
+}
+
+/**
+ * Возвращает отображаемое название расы по slug (для fallback при пустом списке рас из API).
+ * @param {string} slug
+ * @returns {string}
+ */
+export function getRaceNameBySlug(slug) {
+  return RACE_SLUG_NAMES[slug] ?? slug
+}
+
 const RACE_SLUGS = Object.keys(RACE_CENTROIDS)
 
 function euclidean(a, b) {
